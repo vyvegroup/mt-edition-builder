@@ -59,9 +59,33 @@ jobs:
 
       - name: Decompile APK
         run: |
-          java -jar /tmp/apktool.jar d original.apk -o decompiled -f 2>&1 | tail -20
+          java -jar /tmp/apktool.jar d original.apk -o decompiled -f --use-aapt2 2>&1 | tail -20
           ls -la decompiled/
           ls decompiled/smali*/  2>/dev/null | head -30
+
+      - name: Fix APKTOOL_DUPLICATE resource files
+        run: |
+          cd decompiled
+          # Remove problematic APKTOOL_DUPLICATE resource files that cause build failures
+          # These are from a previous decompile/recompile cycle
+          rm -f res/values-anydpi-v26/mipmaps.xml 2>/dev/null
+          rm -f res/values-hdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-mdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-xhdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-xxhdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-xxxhdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-land/layouts.xml 2>/dev/null
+          rm -f res/values-sw600dp/layouts.xml 2>/dev/null
+          rm -f res/values-v22/layouts.xml 2>/dev/null
+          # Clean any other APKTOOL_DUPLICATE resource files with invalid refs
+          find res -name "*.xml" -exec grep -l "APKTOOL_DUPLICATE" {} \; 2>/dev/null | while read f; do
+            # Check if file has invalid resource type references
+            if grep -qE "type '(mipmap|layout)'" "$f" 2>/dev/null; then
+              echo "Removing broken resource: $f"
+              rm -f "$f"
+            fi
+          done
+          echo "Broken resource files cleaned"
 
       - name: Discover package and app name info
         run: |
