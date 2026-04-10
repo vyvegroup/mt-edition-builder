@@ -1,5 +1,3 @@
-# Build v2
-name: Build MT Edition APK
 
 on:
   push:
