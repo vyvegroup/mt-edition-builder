@@ -153,16 +153,17 @@ jobs:
           echo "Signatures removed"
 
       - name: Analyze filter class
+        continue-on-error: true
         run: |
           cd decompiled
-          echo "=== Looking for Unicode method (U+06D5 = ۥ) ==="
+          echo "=== Looking for Unicode method (U+06D5) ==="
           for SD in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
             [ -d "$SD" ] || continue
-            FOUND=$(grep -rl $'\u06d5' "$SD/" 2>/dev/null)
+            FOUND=$(grep -rl $'\u06d5' "$SD/" 2>/dev/null || true)
             [ -z "$FOUND" ] || echo "In $SD: $FOUND"
           done
           echo "=== Files with .endsWith ==="
-          grep -rl "\.endsWith" smali*/${{ env.NEW_PATH }}/ 2>/dev/null | head -10
+          grep -rl "\.endsWith" smali*/${{ env.NEW_PATH }}/ 2>/dev/null || echo "none found"
 
       - name: Create helper classes via Python
         run: |
