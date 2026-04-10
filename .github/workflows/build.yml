@@ -362,9 +362,10 @@ jobs:
 
       - name: Rebuild APK
         run: |
-          # Use -k to keep original resources.arsc (avoids APKTOOL_DUPLICATE issues)
-          # App name will be patched afterwards via binary replacement
-          java -jar /tmp/apktool.jar b decompiled -o mt_edition_unsigned.apk -k --use-aapt2 2>&1 | tail -30
+          # Use --no-res to completely skip resource compilation
+          # Original resources.arsc will be used unchanged
+          # App name will be patched afterwards
+          java -jar /tmp/apktool.jar b decompiled -o mt_edition_unsigned.apk --no-res 2>&1 | tail -30
           ls -lh mt_edition_unsigned.apk
 
       - name: Binary patch app name in APK
