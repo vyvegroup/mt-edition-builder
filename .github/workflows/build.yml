@@ -66,26 +66,55 @@ jobs:
       - name: Fix APKTOOL_DUPLICATE resource files
         run: |
           cd decompiled
-          # Remove problematic APKTOOL_DUPLICATE resource files that cause build failures
-          # These are from a previous decompile/recompile cycle
-          rm -f res/values-anydpi-v26/mipmaps.xml 2>/dev/null
-          rm -f res/values-hdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-mdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-xhdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-xxhdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-xxxhdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-land/layouts.xml 2>/dev/null
-          rm -f res/values-sw600dp/layouts.xml 2>/dev/null
-          rm -f res/values-v22/layouts.xml 2>/dev/null
-          # Clean any other APKTOOL_DUPLICATE resource files with invalid refs
-          find res -name "*.xml" -exec grep -l "APKTOOL_DUPLICATE" {} \; 2>/dev/null | while read f; do
-            # Check if file has invalid resource type references
-            if grep -qE "type '(mipmap|layout)'" "$f" 2>/dev/null; then
-              echo "Removing broken resource: $f"
-              rm -f "$f"
+          # The APK was previously decompiled/recompiled, creating APKTOOL_DUPLICATE entries
+          # These break aapt resource compilation. We need to clean them.
+          
+          # Approach: Remove all resource XML files that reference APKTOOL_DUPLICATE values
+          # These are in values-XX directories and contain broken resource references
+          echo "=== Finding APKTOOL_DUPLICATE resource files ==="
+          find res -name "*.xml" | while read f; do
+            if grep -q "APKTOOL_DUPLICATE" "$f" 2>/dev/null; then
+              echo "  Has DUPLICATE refs: $f"
             fi
           done
-          echo "Broken resource files cleaned"
+          
+          # Remove public.xml APKTOOL_DUPLICATE entries (they break resource ID mapping)
+          if [ -f res/values/public.xml ]; then
+            cp res/values/public.xml res/values/public.xml.bak
+            grep -v "APKTOOL_DUPLICATE" res/values/public.xml.bak > res/values/public.xml
+            REMOVED=$(diff res/values/public.xml.bak res/values/public.xml | grep -c ">" || echo 0)
+            echo "Removed $REMOVED APKTOOL_DUPLICATE entries from public.xml"
+          fi
+          
+          # Find and remove resource XML files that ONLY contain APKTOOL_DUPLICATE refs
+          # (i.e. files whose values are all APKTOOL_DUPLICATE references)
+          for f in $(find res -name "*.xml" -path "*/values*" | sort); do
+            # Skip the main values directory core files
+            case "$f" in
+              res/values/strings.xml)
+                # Clean APKTOOL_DUPLICATE keys from strings.xml but keep non-duplicate entries
+                cp "$f" "$f.bak"
+                grep -v "APKTOOL_DUPLICATE" "$f.bak" > "$f"
+                echo "  Cleaned DUPLICATE entries from strings.xml"
+                continue
+                ;;
+              res/values/styles.xml|res/values/colors.xml|res/values/dimens.xml|res/values/themes.xml|res/values/attrs.xml|res/values/public.xml|res/values/ids.xml)
+                continue
+                ;;
+            esac
+            # If ALL item values in this file are APKTOOL_DUPLICATE refs, remove it
+            if grep -q "APKTOOL_DUPLICATE" "$f" 2>/dev/null; then
+              # Check if it has any non-DUPLICATE values
+              NON_DUP=$(grep -v "APKTOOL_DUPLICATE" "$f" | grep -c "<item\|<string\|<style\|<color\|<dimen" 2>/dev/null || echo 0)
+              if [ "$NON_DUP" -eq 0 ]; then
+                echo "Removing all-DUPLICATE file: $f"
+                rm -f "$f"
+              else
+                echo "Has mixed content: $f (keeping)"
+              fi
+            fi
+          done
+          echo "Resource cleanup done"
 
       - name: Discover package and app name info
         run: |
@@ -109,17 +138,13 @@ jobs:
           sed -i "s|${{ env.OLD_PATH }}|${{ env.NEW_PATH }}|g" AndroidManifest.xml
           echo "AFTER:" && grep 'package=' AndroidManifest.xml | head -2
 
-      - name: STEP 2 - Change app name everywhere
+      - name: STEP 2 - Change app name in strings
         run: |
           cd decompiled
           echo "Replacing MT Manager -> MT Edition..."
-          # Replace app name ONLY in strings.xml files (NOT public.xml)
           find res -name "strings.xml" -exec sed -i 's/MT Manager/MT Edition/g' {} \;
-          # Verify
-          echo "Remaining MT Manager refs:"
-          grep -rc "MT Manager" res/values/strings.xml 2>/dev/null || echo "0"
-          echo "New MT Edition refs:"
-          grep -rc "MT Edition" res/values/strings.xml 2>/dev/null
+          echo "MT Manager count:" $(grep -rc "MT Manager" res/values/strings.xml 2>/dev/null || echo 0)
+          echo "MT Edition count:" $(grep -rc "MT Edition" res/values/strings.xml 2>/dev/null || echo 0)
 
       - name: STEP 3 - Rename smali directories
         run: |
