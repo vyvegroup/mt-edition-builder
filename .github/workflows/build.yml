@@ -35,23 +35,14 @@ jobs:
 
       - name: Download apktool
         run: |
-          curl -sL -o /tmp/apktool.jar "https://github.com/nicoulaj/apktool/releases/download/v2.10.0/apktool_2.10.0.jar"
+          curl -sL -o /tmp/apktool.jar "https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar"
           SZ=$(stat -c%s /tmp/apktool.jar 2>/dev/null || echo 0)
           echo "Size: $SZ"
           if [ "$SZ" -lt 10000 ]; then
-            echo "Trying fallback..."
-            curl -sL -o /tmp/apktool.jar "https://github.com/nicoulaj/apktool/releases/download/v2.9.3/apktool_2.9.3.jar"
-            SZ=$(stat -c%s /tmp/apktool.jar 2>/dev/null || echo 0)
-            echo "Fallback size: $SZ"
+            echo "Fallback to v2.9.3..."
+            curl -sL -o /tmp/apktool.jar "https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar"
           fi
-          # Try official source
-          if [ "$SZ" -lt 10000 ]; then
-            echo "Trying iBotPeaches..."
-            curl -sL -o /tmp/apktool.jar "https://github.com/nicoulaj/apktool/releases/download/v2.10.0/apktool_2.10.0.jar" --connect-timeout 15
-            SZ=$(stat -c%s /tmp/apktool.jar 2>/dev/null || echo 0)
-            echo "iBotPeaches size: $SZ"
-          fi
-          java -jar /tmp/apktool.jar --version 2>&1 || echo "apktool version unknown"
+          java -jar /tmp/apktool.jar --version 2>&1 || echo "version check failed"
 
       - name: Download uber-apk-signer
         run: |
