@@ -18,9 +18,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      OLD_PKG: "bin.mt.plus"
+      OLD_PKG: "bin.mt.plus.canary"
       NEW_PKG: "bin.mt.edition"
-      OLD_PATH: "bin/mt/plus"
+      OLD_PATH: "bin/mt/plus/canary"
       NEW_PATH: "bin/mt/edition"
 
     steps:
@@ -67,23 +67,15 @@ jobs:
         run: |
           cd decompiled
           echo "=== MANIFEST PACKAGE ==="
-          grep 'package=' AndroidManifest.xml
+          grep -o 'package="[^"]*"' AndroidManifest.xml
           echo "=== MANIFEST LABEL ==="
-          grep 'android:label' AndroidManifest.xml | head -5
-          echo "=== STRINGS.XML FILES ==="
-          find res -name "strings.xml"
+          grep 'android:label' AndroidManifest.xml | head -3
           echo "=== APP NAME IN STRINGS ==="
-          grep -rn "MT Manager" res/values/strings.xml 2>/dev/null || echo "not in default strings"
-          for f in $(find res -name "strings.xml"); do
-            MATCH=$(grep "MT Manager" "$f" 2>/dev/null)
-            if [ -n "$MATCH" ]; then
-              echo "FOUND in $f: $MATCH"
-            fi
-          done
+          grep -c "MT Manager" res/values/strings.xml 2>/dev/null || echo "0"
           echo "=== SMALI DIR STRUCTURE ==="
-          find . -type d -path "*/bin/mt/*" | sort
+          find . -type d -path "*/bin/mt/*" | sort | head -20
           echo "=== SMALI L-REF COUNT ==="
-          grep -rl "Lbin/mt/plus" . --include="*.smali" 2>/dev/null | wc -l
+          grep -rl "L${{ env.OLD_PATH }}" . --include="*.smali" 2>/dev/null | wc -l || echo "0"
 
       - name: STEP 1 - Change package in AndroidManifest
         run: |
@@ -97,11 +89,13 @@ jobs:
         run: |
           cd decompiled
           echo "Replacing MT Manager -> MT Edition..."
-          # Replace in all XML files
-          find res -name "*.xml" -exec sed -i 's/MT Manager/MT Edition/g' {} \;
+          # Replace app name in all strings.xml files
+          find res -name "strings.xml" -exec sed -i 's/MT Manager/MT Edition/g' {} \;
+          # Also replace in public.xml
+          sed -i 's/MT Manager/MT Edition/g' res/values/public.xml 2>/dev/null || true
           # Verify
           echo "Remaining MT Manager refs:"
-          grep -rn "MT Manager" res/ 2>/dev/null || echo "NONE"
+          grep -rc "MT Manager" res/values/strings.xml 2>/dev/null || echo "0"
           echo "New MT Edition refs:"
           grep -rc "MT Edition" res/values/strings.xml 2>/dev/null
 
