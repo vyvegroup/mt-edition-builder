@@ -138,10 +138,10 @@ jobs:
       - name: STEP 2 - Change app name in strings
         run: |
           cd decompiled
-          echo "Replacing MT Manager -> MT Edition..."
-          find res -name "strings.xml" -exec sed -i 's/MT Manager/MT Edition/g' {} \;
-          echo "MT Manager count:" $(grep -rc "MT Manager" res/values/strings.xml 2>/dev/null || echo 0)
-          echo "MT Edition count:" $(grep -rc "MT Edition" res/values/strings.xml 2>/dev/null || echo 0)
+          echo "=== App name change will be done via binary patch of resources.arsc ==="
+          echo "Skipping strings.xml modification (broken by APKTOOL_DUPLICATE)"
+          echo "Original app name: MT Manager"
+          echo "New app name: MT Edition (same length = 10 chars)"
 
       - name: STEP 3 - Rename smali directories
         run: |
@@ -362,8 +362,27 @@ jobs:
 
       - name: Rebuild APK
         run: |
-          java -jar /tmp/apktool.jar b decompiled -o mt_edition_unsigned.apk --use-aapt2 2>&1 | tail -30
+          # Use -k to keep original resources.arsc (avoids APKTOOL_DUPLICATE issues)
+          # App name will be patched afterwards via binary replacement
+          java -jar /tmp/apktool.jar b decompiled -o mt_edition_unsigned.apk -k --use-aapt2 2>&1 | tail -30
           ls -lh mt_edition_unsigned.apk
+
+      - name: Binary patch app name in APK
+        run: |
+          # Replace "MT Manager" with "MT Edition" in the APK binary (resources.arsc)
+          # Both strings are 10 chars, so binary replacement works
+          cp mt_edition_unsigned.apk mt_edition_patched.apk
+          # Use sed to do binary replacement in the APK
+          sed -i 's/MT Manager/MT Edition/g' mt_edition_patched.apk
+          # Verify
+          echo "=== Verification ==="
+          unzip -p mt_edition_patched.apk resources.arsc | strings | grep -E "MT (Manager|Edition)" | sort -u | head -10
+          # Count replacements
+          echo "MT Manager remaining:"
+          unzip -p mt_edition_patched.apk resources.arsc | strings | grep -c "MT Manager" || echo 0
+          echo "MT Edition found:"
+          unzip -p mt_edition_patched.apk resources.arsc | strings | grep -c "MT Edition" || echo 0
+          mv mt_edition_patched.apk mt_edition_unsigned.apk
 
       - name: Sign APK
         run: |
@@ -388,9 +407,9 @@ jobs:
           echo "=== APK Size ==="
           ls -lh MT_Edition_signed.apk
           echo "=== Package check ==="
-          unzip -p MT_Edition_signed.apk AndroidManifest.xml | strings | grep -E "bin\.mt\.(plus|edition)" | sort -u
+          unzip -p MT_Edition_signed.apk AndroidManifest.xml | strings | grep -E "bin\.mt\." | sort -u
           echo "=== App name check ==="
-          unzip -p MT_Edition_signed.apk resources.arsc | strings | grep -E "MT (Manager|Edition)" | sort -u
+          unzip -p MT_Edition_signed.apk resources.arsc | strings | grep -E "MT (Manager|Edition)" | sort -u | head -10
 
       - name: Create GitHub Release
         env:
