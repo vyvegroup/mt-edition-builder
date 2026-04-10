@@ -66,38 +66,52 @@ jobs:
       - name: Fix APKTOOL_DUPLICATE resource files
         run: |
           cd decompiled
-          # This APK was previously decompiled/recompiled, creating thousands of APKTOOL_DUPLICATE entries
-          # Strategy: Remove ALL resource XML files that have ANY APKTOOL_DUPLICATE references,
-          # EXCEPT for strings.xml where we just clean the DUPLICATE lines.
-          # The app will still work because it falls back to default values.
+          # Keep public.xml intact (needed for resource ID mapping)
+          # Only remove resource XML files that are entirely DUPLICATE references
+          # and would cause aapt compile errors
           
-          # Clean APKTOOL_DUPLICATE entries from public.xml
-          if [ -f res/values/public.xml ]; then
-            grep -v "APKTOOL_DUPLICATE" res/values/public.xml > res/values/public.xml.tmp
-            mv res/values/public.xml.tmp res/values/public.xml
-            echo "Cleaned public.xml"
-          fi
+          # Remove specific known-bad files (all-DUPLICATE content with invalid refs)
+          rm -f res/values-anydpi-v26/mipmaps.xml 2>/dev/null
+          rm -f res/values-hdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-xhdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-xxhdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-xxxhdpi/mipmaps.xml 2>/dev/null
+          rm -f res/values-land/layouts.xml 2>/dev/null
+          rm -f res/values-sw600dp/layouts.xml 2>/dev/null
+          rm -f res/values-v22/layouts.xml 2>/dev/null
+          rm -f res/values-v26/layouts.xml 2>/dev/null
+          rm -f res/values-v24/styles.xml 2>/dev/null
+          rm -f res/values-v23/styles.xml 2>/dev/null
+          rm -f res/values-v23/drawables.xml 2>/dev/null
+          rm -f res/values-v23/colors.xml 2>/dev/null
+          rm -f res/values-v25/styles.xml 2>/dev/null
+          rm -f res/values-v26/styles.xml 2>/dev/null
+          rm -f res/values-v27/styles.xml 2>/dev/null
+          rm -f res/values-v28/styles.xml 2>/dev/null
+          rm -f res/values-v29/styles.xml 2>/dev/null
+          rm -f res/values-v30/bools.xml 2>/dev/null
+          rm -f res/values-v31/styles.xml 2>/dev/null
+          rm -f res/values-v31/colors.xml 2>/dev/null
+          rm -f res/values-v34/colors.xml 2>/dev/null
+          rm -f res/values/animators.xml 2>/dev/null
+          rm -f res/values/anims.xml 2>/dev/null
+          rm -f res/values/interpolators.xml 2>/dev/null
+          rm -f res/values/attrs.xml 2>/dev/null
+          rm -f res/values/ids.xml 2>/dev/null
+          rm -f res/values-night/styles.xml 2>/dev/null
+          rm -f res/values-watch/styles.xml 2>/dev/null
+          rm -f res/values-watch/drawables.xml 2>/dev/null
+          rm -f res/values-watch/layouts.xml 2>/dev/null
+          rm -f res/values-land/styles.xml 2>/dev/null
+          rm -f res/values-ldrtl/drawables.xml 2>/dev/null
+          rm -f res/values-ldrtl-*/drawables.xml 2>/dev/null
+          rm -f res/values-nodpi/drawables.xml 2>/dev/null
+          rm -f res/values-ldpi/drawables.xml 2>/dev/null
+          rm -f res/values-mdpi/drawables.xml 2>/dev/null
+          rm -f res/values-anydpi/drawables.xml 2>/dev/null
+          rm -f res/values-night-xxxhdpi/drawables.xml 2>/dev/null
           
-          # For ALL other XML files with APKTOOL_DUPLICATE: delete or clean
-          find res -name "*.xml" | while read f; do
-            if ! grep -q "APKTOOL_DUPLICATE" "$f" 2>/dev/null; then
-              continue
-            fi
-            # For strings.xml: remove DUPLICATE lines only
-            if echo "$f" | grep -q "strings\.xml$"; then
-              grep -v "APKTOOL_DUPLICATE" "$f" > "$f.tmp"
-              mv "$f.tmp" "$f"
-              continue
-            fi
-            # For ALL other files: remove completely
-            rm -f "$f"
-            echo "Removed: $f"
-          done
-          
-          # Also remove any empty values-XX directories
-          find res -type d -empty -delete
-          
-          echo "Resource cleanup done"
+          echo "Resource files cleaned"
 
       - name: Discover package and app name info
         run: |
