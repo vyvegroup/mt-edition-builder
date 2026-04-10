@@ -59,59 +59,13 @@ jobs:
 
       - name: Decompile APK
         run: |
-          java -jar /tmp/apktool.jar d original.apk -o decompiled -f --use-aapt2 2>&1 | tail -20
+          java -jar /tmp/apktool.jar d original.apk -o decompiled -f 2>&1 | tail -20
+          # Remove entire res/ directory to prevent APKTOOL_DUPLICATE build failures
+          # Original resources.arsc will be used from original APK
+          rm -rf decompiled/res
+          echo "=== Decompiled (res/ removed) ==="
           ls -la decompiled/
-          ls decompiled/smali*/  2>/dev/null | head -30
-
-      - name: Fix APKTOOL_DUPLICATE resource files
-        run: |
-          cd decompiled
-          # Keep public.xml intact (needed for resource ID mapping)
-          # Only remove resource XML files that are entirely DUPLICATE references
-          # and would cause aapt compile errors
-          
-          # Remove specific known-bad files (all-DUPLICATE content with invalid refs)
-          rm -f res/values-anydpi-v26/mipmaps.xml 2>/dev/null
-          rm -f res/values-hdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-xhdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-xxhdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-xxxhdpi/mipmaps.xml 2>/dev/null
-          rm -f res/values-land/layouts.xml 2>/dev/null
-          rm -f res/values-sw600dp/layouts.xml 2>/dev/null
-          rm -f res/values-v22/layouts.xml 2>/dev/null
-          rm -f res/values-v26/layouts.xml 2>/dev/null
-          rm -f res/values-v24/styles.xml 2>/dev/null
-          rm -f res/values-v23/styles.xml 2>/dev/null
-          rm -f res/values-v23/drawables.xml 2>/dev/null
-          rm -f res/values-v23/colors.xml 2>/dev/null
-          rm -f res/values-v25/styles.xml 2>/dev/null
-          rm -f res/values-v26/styles.xml 2>/dev/null
-          rm -f res/values-v27/styles.xml 2>/dev/null
-          rm -f res/values-v28/styles.xml 2>/dev/null
-          rm -f res/values-v29/styles.xml 2>/dev/null
-          rm -f res/values-v30/bools.xml 2>/dev/null
-          rm -f res/values-v31/styles.xml 2>/dev/null
-          rm -f res/values-v31/colors.xml 2>/dev/null
-          rm -f res/values-v34/colors.xml 2>/dev/null
-          rm -f res/values/animators.xml 2>/dev/null
-          rm -f res/values/anims.xml 2>/dev/null
-          rm -f res/values/interpolators.xml 2>/dev/null
-          rm -f res/values/attrs.xml 2>/dev/null
-          rm -f res/values/ids.xml 2>/dev/null
-          rm -f res/values-night/styles.xml 2>/dev/null
-          rm -f res/values-watch/styles.xml 2>/dev/null
-          rm -f res/values-watch/drawables.xml 2>/dev/null
-          rm -f res/values-watch/layouts.xml 2>/dev/null
-          rm -f res/values-land/styles.xml 2>/dev/null
-          rm -f res/values-ldrtl/drawables.xml 2>/dev/null
-          rm -f res/values-ldrtl-*/drawables.xml 2>/dev/null
-          rm -f res/values-nodpi/drawables.xml 2>/dev/null
-          rm -f res/values-ldpi/drawables.xml 2>/dev/null
-          rm -f res/values-mdpi/drawables.xml 2>/dev/null
-          rm -f res/values-anydpi/drawables.xml 2>/dev/null
-          rm -f res/values-night-xxxhdpi/drawables.xml 2>/dev/null
-          
-          echo "Resource files cleaned"
+          ls decompiled/smali*/ 2>/dev/null | head -30
 
       - name: Discover package and app name info
         run: |
@@ -134,14 +88,6 @@ jobs:
           sed -i "s|${{ env.OLD_PKG }}|${{ env.NEW_PKG }}|g" AndroidManifest.xml
           sed -i "s|${{ env.OLD_PATH }}|${{ env.NEW_PATH }}|g" AndroidManifest.xml
           echo "AFTER:" && grep 'package=' AndroidManifest.xml | head -2
-
-      - name: STEP 2 - Change app name in strings
-        run: |
-          cd decompiled
-          echo "=== App name change will be done via binary patch of resources.arsc ==="
-          echo "Skipping strings.xml modification (broken by APKTOOL_DUPLICATE)"
-          echo "Original app name: MT Manager"
-          echo "New app name: MT Edition (same length = 10 chars)"
 
       - name: STEP 3 - Rename smali directories
         run: |
@@ -174,27 +120,13 @@ jobs:
           echo "Remaining old refs:"
           grep -r "L${{ env.OLD_PATH }}" . --include="*.smali" 2>/dev/null | wc -l
 
-      - name: STEP 5 - Replace in all XML resources and assets
+      - name: STEP 5 - Replace in assets
         run: |
           cd decompiled
-          # Only replace package name in manifest and smali, NOT in resource XML values
-          # Resource files (res/values-*/styles.xml, mipmaps.xml etc) contain resource refs
-          # that should NOT have package names replaced
-          
-          # Replace in AndroidManifest.xml only
-          sed -i 's|${{ env.OLD_PKG }}|${{ env.NEW_PKG }}|g' AndroidManifest.xml
-          sed -i 's|${{ env.OLD_PATH }}|${{ env.NEW_PATH }}|g' AndroidManifest.xml
-          
-          # Replace in assets (text-based config files)
           find assets -type f -exec grep -l "${{ env.OLD_PKG }}" {} \; 2>/dev/null | while read f; do
             sed -i 's|${{ env.OLD_PKG }}|${{ env.NEW_PKG }}|g' "$f"
           done
-          
-          echo "=== FINAL CHECK ==="
-          echo "Old pkg in manifest:" $(grep -c "${{ env.OLD_PKG }}" AndroidManifest.xml 2>/dev/null || echo 0)
-          echo "New pkg in manifest:" $(grep -c "${{ env.NEW_PKG }}" AndroidManifest.xml)
-          echo "Old app name:" $(grep -c "MT Manager" res/values/strings.xml 2>/dev/null || echo 0)
-          echo "New app name:" $(grep -c "MT Edition" res/values/strings.xml 2>/dev/null || echo 0)
+          echo "Assets cleaned"
 
       - name: STEP 6 - Remove old signatures
         run: |
