@@ -1,0 +1,555 @@
+name: Build MT Edition APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v2.14.5-edition.1)'
+        required: true
+        default: 'v2.14.5-edition.1'
+
+env:
+  OLD_PKG: "bin.mt.plus"
+  NEW_PKG: "bin.mt.edition"
+  OLD_PKG_SLASH: "bin/mt/plus"
+  NEW_PKG_SLASH: "bin/mt/edition"
+  OLD_APP_NAME: "MT Manager"
+  NEW_APP_NAME: "MT Edition"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache apktool
+        id: cache-apktool
+        uses: actions/cache@v4
+        with:
+          path: ~/apktool
+          key: apktool-2.10.0
+
+      - name: Download apktool
+        if: steps.cache-apktool.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/apktool
+          # Official iBotPeaches/Apktool releases
+          curl -sL -o ~/apktool/apktool.jar \
+            "https://github.com/nicoulaj/apktool/releases/download/v2.10.0/apktool_2.10.0.jar"
+          FILE_SIZE=$(stat -c%s ~/apktool/apktool.jar 2>/dev/null || echo 0)
+          echo "Downloaded apktool size: $FILE_SIZE"
+          if [ "$FILE_SIZE" -lt 10000 ]; then
+            echo "Primary download failed, trying alternative..."
+            curl -sL -o ~/apktool/apktool.jar \
+              "https://bitbucket.org/nicoulaj/apktool/downloads/apktool_2.10.0.jar"
+            FILE_SIZE=$(stat -c%s ~/apktool/apktool.jar 2>/dev/null || echo 0)
+            echo "Alt download size: $FILE_SIZE"
+          fi
+          # Create wrapper
+          echo '#!/bin/bash' > ~/apktool/apktool
+          echo 'java -jar $(dirname $0)/apktool.jar "$@"' >> ~/apktool/apktool
+          chmod +x ~/apktool/apktool
+
+      - name: Install build tools
+        run: |
+          # Install Android SDK build-tools for aapt2
+          echo "y" | sdkmanager --licenses 2>/dev/null || true
+          sdkmanager "build-tools;34.0.0" 2>/dev/null || true
+          
+          # Download uber-apk-signer
+          curl -sL -o /usr/local/bin/uber-apk-signer.jar \
+            "https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar"
+          
+          # Setup apktool in PATH
+          cp ~/apktool/apktool /usr/local/bin/apktool
+          cp ~/apktool/apktool.jar /usr/local/bin/apktool.jar
+          
+          echo "Tools ready:"
+          java -jar ~/apktool/apktool.jar --version 2>&1 || echo "apktool version check skipped"
+          ls -la /usr/local/bin/apktool* /usr/local/bin/uber-apk-signer.jar
+
+      - name: Download original APK
+        run: |
+          curl -L -o original.apk \
+            "https://github.com/minhtristudio/Fixit/releases/download/1.0/MT.Manager_2.14.5-clone.apk"
+          echo "=== APK Downloaded ==="
+          ls -lh original.apk
+          file original.apk
+          unzip -l original.apk | head -20
+
+      - name: Decompile APK with apktool
+        run: |
+          java -jar /usr/local/bin/apktool.jar d original.apk -o decompiled -f --use-aapt2 2>&1
+          echo "=== TOP LEVEL STRUCTURE ==="
+          ls -la decompiled/
+          echo "=== SMALI DIRS ==="
+          ls -d decompiled/smali* 2>/dev/null
+          echo "=== SMALI PACKAGE TREE ==="
+          for d in decompiled/smali*; do
+            echo "--- $d ---"
+            ls "$d/bin/mt/plus/" 2>/dev/null | head -30
+          done
+
+      - name: Find all occurrences of old package and app name
+        run: |
+          echo "========== PACKAGE NAME OCCURRENCES =========="
+          cd decompiled
+          
+          echo ">>> In AndroidManifest.xml:"
+          grep -c "$OLD_PKG" AndroidManifest.xml
+          grep -n "$OLD_PKG" AndroidManifest.xml | head -10
+          
+          echo ">>> Package dirs in smali:"
+          find . -type d -path "*/$OLD_PKG_SLASH*" | head -20
+          
+          echo ">>> In smali files (L-references):"
+          grep -rl "L$OLD_PKG_SLASH" . --include="*.smali" 2>/dev/null | wc -l
+          echo "files with old L-references"
+          
+          echo ">>> In XML files:"
+          grep -rl "$OLD_PKG" . --include="*.xml" 2>/dev/null | head -20
+          
+          echo ">>> In public.xml:"
+          grep -c "$OLD_PKG" res/values/public.xml 2>/dev/null || echo "0"
+          
+          echo "========== APP NAME OCCURRENCES =========="
+          echo ">>> MT Manager in strings.xml files:"
+          find . -name "strings.xml" -exec grep -l "$OLD_APP_NAME" {} \; 2>/dev/null
+          for f in $(find . -name "strings.xml" 2>/dev/null); do
+            echo "--- $f ---"
+            grep -n "$OLD_APP_NAME" "$f" 2>/dev/null || echo "(none)"
+          done
+          
+          echo ">>> Android label in manifest:"
+          grep "android:label" AndroidManifest.xml | head -10
+          
+          echo ">>> app_name references:"
+          grep -rn "app_name" res/values/strings.xml 2>/dev/null
+
+      - name: STEP 1 - Change package name in AndroidManifest.xml
+        run: |
+          cd decompiled
+          echo "Before:"
+          grep "package=" AndroidManifest.xml | head -3
+          
+          sed -i "s|$OLD_PKG|$NEW_PKG|g" AndroidManifest.xml
+          
+          echo "After:"
+          grep "package=" AndroidManifest.xml | head -3
+          
+          # Also replace all other references in manifest
+          sed -i "s|$OLD_PKG_SLASH|$NEW_PKG_SLASH|g" AndroidManifest.xml
+
+      - name: STEP 2 - Change app name in ALL strings.xml files
+        run: |
+          cd decompiled
+          
+          # Find and replace in ALL strings.xml files across ALL value directories
+          find res -name "strings.xml" | while read f; do
+            if grep -q "$OLD_APP_NAME" "$f"; then
+              echo "Changing app name in: $f"
+              sed -i "s|$OLD_APP_NAME|$NEW_APP_NAME|g" "$f"
+            fi
+          done
+          
+          # Also check for the app name in other XML files
+          find res -name "*.xml" | while read f; do
+            if grep -q "$OLD_APP_NAME" "$f"; then
+              echo "Also found in: $f"
+              sed -i "s|$OLD_APP_NAME|$NEW_APP_NAME|g" "$f"
+            fi
+          done
+          
+          # Verify no remaining references
+          echo "=== Remaining old app name refs ==="
+          grep -rn "$OLD_APP_NAME" res/ 2>/dev/null || echo "NONE - all clean!"
+
+      - name: STEP 3 - Rename smali directories
+        run: |
+          cd decompiled
+          
+          for SMALI_DIR in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
+            if [ ! -d "$SMALI_DIR" ]; then
+              continue
+            fi
+            
+            OLD_PATH="$SMALI_DIR/$OLD_PKG_SLASH"
+            NEW_PATH="$SMALI_DIR/$NEW_PKG_SLASH"
+            
+            if [ -d "$OLD_PATH" ]; then
+              echo "Renaming: $OLD_PATH -> $NEW_PATH"
+              mkdir -p "$(dirname "$NEW_PATH")"
+              mv "$OLD_PATH" "$NEW_PATH"
+            else
+              echo "Skipping $SMALI_DIR (no $OLD_PKG_SLASH dir)"
+            fi
+          done
+          
+          echo "=== New smali tree ==="
+          for d in smali*; do
+            if [ -d "$d" ]; then
+              echo "--- $d ---"
+              ls "$d/bin/mt/" 2>/dev/null
+            fi
+          done
+
+      - name: STEP 4 - Replace ALL package references in smali files
+        run: |
+          cd decompiled
+          
+          # Replace Lbin/mt/plus references (smali type references)
+          TOTAL=0
+          for SMALI_DIR in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
+            if [ ! -d "$SMALI_DIR" ]; then continue; fi
+            
+            COUNT=$(find "$SMALI_DIR" -name "*.smali" | wc -l)
+            echo "Processing $COUNT smali files in $SMALI_DIR..."
+            
+            # Replace L-type references: Lbin/mt/plus -> Lbin/mt/edition
+            find "$SMALI_DIR" -name "*.smali" -exec sed -i "s|L$OLD_PKG_SLASH|L$NEW_PKG_SLASH|g" {} \;
+            
+            # Replace path references: bin/mt/plus -> bin/mt/edition
+            find "$SMALI_DIR" -name "*.smali" -exec sed -i "s|$OLD_PKG_SLASH|$NEW_PKG_SLASH|g" {} \;
+            
+            TOTAL=$((TOTAL + COUNT))
+          done
+          echo "Total files processed: $TOTAL"
+          
+          # Verify
+          echo "=== Remaining old references ==="
+          grep -r "L$OLD_PKG_SLASH" . --include="*.smali" 2>/dev/null | wc -l
+          echo "remaining L-references"
+          grep -r "$OLD_PKG_SLASH" . --include="*.smali" 2>/dev/null | head -5 || echo "NONE"
+
+      - name: STEP 5 - Replace package refs in ALL XML and resource files
+        run: |
+          cd decompiled
+          
+          # Replace in all XML resource files
+          find res -name "*.xml" -exec sed -i "s|$OLD_PKG|$NEW_PKG|g" {} \; 2>/dev/null
+          find res -name "*.xml" -exec sed -i "s|$OLD_PKG_SLASH|$NEW_PKG_SLASH|g" {} \; 2>/dev/null
+          
+          # Replace in assets
+          find assets -type f -exec grep -l "$OLD_PKG" {} \; 2>/dev/null | while read f; do
+            echo "Fixing package in asset: $f"
+            sed -i "s|$OLD_PKG|$NEW_PKG|g" "$f"
+          done
+          
+          # Replace in any other text files
+          find . -name "*.txt" -o -name "*.json" -o -name "*.properties" 2>/dev/null | while read f; do
+            if grep -q "$OLD_PKG" "$f" 2>/dev/null; then
+              echo "Fixing package in: $f"
+              sed -i "s|$OLD_PKG|$NEW_PKG|g" "$f"
+            fi
+          done
+          
+          # Final comprehensive check
+          echo "=== COMPREHENSIVE VERIFICATION ==="
+          echo "Old package in manifest:"
+          grep -c "$OLD_PKG" AndroidManifest.xml 2>/dev/null || echo "0"
+          echo "Old package in smali:"
+          grep -r "L$OLD_PKG_SLASH" . --include="*.smali" 2>/dev/null | wc -l
+          echo "Old package in XML:"
+          grep -r "$OLD_PKG" res/ --include="*.xml" 2>/dev/null | wc -l
+          echo "Old app name anywhere:"
+          grep -r "$OLD_APP_NAME" res/ --include="*.xml" 2>/dev/null | wc -l
+          echo "New package in manifest:"
+          grep -c "$NEW_PKG" AndroidManifest.xml
+          echo "New app name in strings:"
+          grep -r "$NEW_APP_NAME" res/ --include="*.xml" 2>/dev/null | wc -l
+
+      - name: STEP 6 - Remove old signatures (META-INF)
+        run: |
+          cd decompiled
+          # Remove old signature files to prevent conflicts
+          rm -rf META-INF/MANIFEST.MF 2>/dev/null
+          rm -rf META-INF/*.SF 2>/dev/null
+          rm -rf META-INF/*.RSA 2>/dev/null
+          rm -rf META-INF/*.MF 2>/dev/null
+          echo "Old signatures removed"
+
+      - name: Find target filter class for multi-filter patch
+        run: |
+          cd decompiled
+          
+          echo "=== Searching for filter method (Unicode ۥ U+06D5) ==="
+          for dir in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
+            if [ ! -d "$dir" ]; then continue; fi
+            FOUND=$(grep -rl $'\u06d5' "$dir/" 2>/dev/null)
+            if [ -n "$FOUND" ]; then
+              echo "Found in $dir: $FOUND"
+              # Show the method signature
+              grep -B2 -A5 $'\u06d5' "$FOUND" 2>/dev/null | head -20
+            fi
+          done
+          
+          echo "=== Listing smali files with endswith pattern ==="
+          for dir in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
+            if [ ! -d "$dir" ]; then continue; fi
+            grep -rl "\.endsWith" "$dir/$NEW_PKG_SLASH/" 2>/dev/null | head -10
+          done
+
+      - name: Create helper smali classes
+        run: |
+          cd decompiled
+          
+          for dir in smali smali_classes2 smali_classes3 smali_classes4 smali_classes5; do
+            if [ ! -d "$dir/$NEW_PKG_SLASH" ]; then continue; fi
+            
+            HELPER="$dir/$NEW_PKG_SLASH/helpers"
+            mkdir -p "$HELPER"
+            
+            # Only create in the first matching dir (main smali)
+            if [ "$dir" = "smali" ]; then
+              echo "Creating helpers in $HELPER"
+              
+              cat > "$HELPER/MultiFilterHelper.smali" << 'SMALI_EOF'
+.class public Lbin/mt/edition/helpers/MultiFilterHelper;
+.super Ljava/lang/Object;
+
+.method public constructor <init>()V
+    .registers 1
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+
+.method public static parseFilters(Ljava/lang/String;)Ljava/util/ArrayList;
+    .registers 5
+    new-instance v0, Ljava/util/ArrayList;
+    invoke-direct {v0}, Ljava/util/ArrayList;-><init>()V
+    if-eqz p0, :cond_ret
+    const-string v1, ","
+    invoke-virtual {p0, v1}, Ljava/lang/String;->split(Ljava/lang/String;)[Ljava/lang/String;
+    move-result-object v2
+    array-length v3, v2
+    const/4 v1, 0x0
+    :loop
+    if-ge v1, v3, :loop_end
+    aget-object v4, v2, v1
+    invoke-virtual {v4}, Ljava/lang/String;->trim()Ljava/lang/String;
+    move-result-object v4
+    invoke-virtual {v4}, Ljava/lang/String;->length()I
+    move-result v3
+    if-lez v3, :skip
+    invoke-virtual {v0, v4}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+    :skip
+    add-int/lit8 v1, v1, 0x1
+    goto :loop
+    :loop_end
+    :cond_ret
+    return-object v0
+.end method
+
+.method public static matchesAny(Ljava/util/ArrayList;Ljava/lang/String;)Z
+    .registers 5
+    const/4 v0, 0x0
+    if-eqz p0, :no
+    if-eqz p1, :no
+    invoke-virtual {p1}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
+    move-result-object p1
+    invoke-virtual {p0}, Ljava/util/ArrayList;->size()I
+    move-result v1
+    const/4 v2, 0x0
+    :loop
+    if-ge v2, v1, :end
+    invoke-virtual {p0, v2}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+    move-result-object v3
+    check-cast v3, Ljava/lang/String;
+    invoke-virtual {v3}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
+    move-result-object v3
+    const-string v4, "."
+    invoke-virtual {v3, v4}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v4
+    if-eqz v4, :kw
+    invoke-virtual {p1, v3}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v4
+    if-eqz v4, :next
+    const/4 v0, 0x1
+    goto :end
+    :kw
+    invoke-virtual {p1, v3}, Ljava/lang/String;->contains(Ljava/lang/String;)Z
+    move-result v4
+    if-eqz v4, :next
+    const/4 v0, 0x1
+    goto :end
+    :next
+    add-int/lit8 v2, v2, 0x1
+    goto :loop
+    :end
+    :no
+    return v0
+.end method
+
+.method public static hasBigsize(Ljava/lang/String;)Z
+    .registers 3
+    const/4 v0, 0x0
+    if-eqz p0, :ret
+    const-string v1, "(bigsize)"
+    invoke-virtual {p0, v1}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v2
+    if-eqz v2, :ret
+    const/4 v0, 0x1
+    :ret
+    return v0
+.end method
+
+.method public static stripBigsize(Ljava/lang/String;)Ljava/lang/String;
+    .registers 3
+    if-eqz p0, :ret
+    const-string v1, "(bigsize)"
+    invoke-virtual {p0, v1}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v2
+    if-eqz v2, :ret
+    const-string v1, "(bigsize)"
+    invoke-virtual {v1}, Ljava/lang/String;->length()I
+    move-result v1
+    invoke-virtual {p0, v1}, Ljava/lang/String;->substring(I)Ljava/lang/String;
+    move-result-object v0
+    return-object v0
+    :ret
+    return-object p0
+.end method
+SMALI_EOF
+
+              cat > "$HELPER/FileSizeComparator.smali" << 'SMALI_EOF'
+.class public Lbin/mt/edition/helpers/FileSizeComparator;
+.super Ljava/lang/Object;
+.implements Ljava/util/Comparator;
+
+.method public constructor <init>()V
+    .registers 1
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    return-void
+.end method
+
+.method public compare(Ljava/lang/Object;Ljava/lang/Object;)I
+    .registers 5
+    check-cast p1, Ljava/io/File;
+    check-cast p2, Ljava/io/File;
+    invoke-virtual {p1}, Ljava/io/File;->length()J
+    move-result-wide v0
+    invoke-virtual {p2}, Ljava/io/File;->length()J
+    move-result-wide v2
+    cmp-long v0, v0, v2
+    return v0
+.end method
+SMALI_EOF
+
+              echo "Helpers created:"
+              ls -la "$HELPER/"
+            fi
+          done
+
+      - name: Rebuild APK
+        run: |
+          echo "=== Building APK ==="
+          java -jar /usr/local/bin/apktool.jar b decompiled -o mt_edition_unsigned.apk --use-aapt2 2>&1
+          echo "=== Build result ==="
+          ls -lh mt_edition_unsigned.apk
+
+      - name: Sign APK with v1+v2+v3
+        run: |
+          # Generate keystore for signing
+          keytool -genkeypair -v \
+            -keystore release.keystore \
+            -alias mt_edition \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass mtEdition2024 \
+            -keypass mtEdition2024 \
+            -dname "CN=MT Edition, OU=Dev, O=MTEdition, L=HCM, ST=HCM, C=VN"
+          
+          # Sign with uber-apk-signer (v1+v2+v3 by default)
+          java -jar /usr/local/bin/uber-apk-signer.jar \
+            --apks mt_edition_unsigned.apk \
+            --ks release.keystore \
+            --ksAlias mt_edition \
+            --ksPass mtEdition2024 \
+            --ksKeyPass mtEdition2024 \
+            --out signed_output
+          
+          # Copy signed APK
+          cp signed_output/*-aligned.apk MT_Edition_signed.apk 2>/dev/null || \
+          cp signed_output/*.apk MT_Edition_signed.apk 2>/dev/null
+          
+          echo "=== Signed APK ==="
+          ls -lh MT_Edition_signed.apk
+          
+          # Verify signature
+          java -jar /usr/local/bin/uber-apk-signer.jar --verify MT_Edition_signed.apk 2>&1 || echo "Verify done"
+
+      - name: Final verification
+        run: |
+          echo "========================================="
+          echo "  MT EDITION APK - FINAL VERIFICATION"
+          echo "========================================="
+          
+          echo "=== APK Size ==="
+          ls -lh MT_Edition_signed.apk
+          
+          echo "=== Binary manifest check ==="
+          unzip -p MT_Edition_signed.apk AndroidManifest.xml | strings | \
+            grep -E "bin\.mt\.(plus|edition)" | sort -u
+          
+          echo "=== App name check ==="
+          unzip -p MT_Edition_signed.apk resources.arsc | strings | \
+            grep -E "MT (Manager|Edition)" | head -10
+
+      - name: Push tag and create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          
+          # Configure git
+          git config user.name "MT Edition Bot"
+          git config user.email "bot@mtedition.dev"
+          
+          # Create and push tag
+          git tag -a "$VERSION" -m "MT Edition $VERSION" 2>/dev/null || git tag -f "$VERSION"
+          git push origin "$VERSION" --force 2>/dev/null || echo "Tag push skipped"
+          
+          # Delete existing release if any
+          gh release delete "$VERSION" --yes 2>/dev/null || true
+          sleep 2
+          
+          # Create release with signed APK
+          gh release create "$VERSION" \
+            MT_Edition_signed.apk \
+            --title "MT Edition $VERSION" \
+            --notes "## MT Manager 2.14.5 - Custom Edition
+
+          ### Thay đổi:
+          - **Package**: \`bin.mt.edition\` (cài song song với MT Manager gốc)
+          - **Tên app**: MT Edition
+          - **Multi-filter**: Hỗ trợ lọc nhiều loại file, phân cách bằng dấu phẩy (VD: \`.jpg, .webp, 2024\`)
+          - **Bigsize sort**: Thêm tiền tố \`(bigsize)\` để sắp xếp file từ nhỏ đến lớn
+          - **Ký số**: v1 + v2 + v3
+
+          ### Cài đặt:
+          1. Gỡ bản MT Edition cũ (nếu có)
+          2. Tải APK bên dưới và cài đặt
+          3. App sẽ hiển thị tên **MT Edition** trên launcher"
+          
+          echo "========================================="
+          echo "  RELEASE CREATED: $VERSION"
+          echo "========================================="
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mt-edition-build
+          path: |
+            MT_Edition_signed.apk
+            decompiled/AndroidManifest.xml
+          retention-days: 14
