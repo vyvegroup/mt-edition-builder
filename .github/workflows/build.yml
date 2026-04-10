@@ -1,3 +1,4 @@
+name: Build MT Edition APK
 
 on:
   push:
